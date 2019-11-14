@@ -1,1 +1,358 @@
-Hello World
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<title>reveal.js</title>
+
+		<link rel="stylesheet" href="css/reset.css">
+		<link rel="stylesheet" href="css/reveal.css">
+		<link rel="stylesheet" href="css/theme/black.css">
+		<link rel="stylesheet" href="css/custom.css">
+
+		<!-- Theme used for syntax highlighting of code -->
+		<link rel="stylesheet" href="lib/css/monokai.css">
+
+		<!-- Printing and PDF exports -->
+		<script>
+			var link = document.createElement( 'link' );
+			link.rel = 'stylesheet';
+			link.type = 'text/css';
+			link.href = window.location.search.match( /print-pdf/gi ) ? 'css/print/pdf.css' : 'css/print/paper.css';
+			document.getElementsByTagName( 'head' )[0].appendChild( link );
+		</script>
+	</head>
+	<body>
+		<div class="reveal">
+			<div class="slides">
+				<section>SQL. UPDATE/INSERT after SELECT. <br/>Возможная проблема в многопоточном исполнении и варианты решения.</section>
+                <section class="with-hide-fragment">
+                    <h2>Описание проблемы</h2>
+                    <div class="fragment">
+                        <pre>
+                            <code data-trim data-noescape>
+                                def add(id: Int, value: Int): Unit = {
+                                    entity = getById(id) //получение сущности из бд
+                                    entity.value += value //изменение значения
+                                    update(entity) //запись в бд с измененным значением
+                                }
+                            </code>
+                        </pre>
+                        <p>При однопоточном вызове данного участка все должно быть хорошо. Но если данный код будет
+                            вызываться в многопоточной среде то у нас возникнут проблемы.</p>
+                    </div>
+                    <div class="fragment">
+                        <pre>
+                            <code data-trim data-noescape>
+                                def add(id: Int, value: Int): Unit = {
+                                    <mark class="first-thread">entity = getById(id) //получение сущности из бд</mark>
+                                    entity.value += value //изменение значения
+                                    update(entity) //запись в бд с измененным значением
+                                }
+                            </code>
+                        </pre>
+                        <p>
+                            <mark class="first-thread">Поток</mark> получает данные из таблицы.
+                        </p>
+                    </div>
+                    <div class="fragment">
+                        <pre>
+                            <code data-trim data-noescape>
+                                def add(id: Int, value: Int): Unit = {
+                                    <mark class="second-thread">entity = getById(id) //получение сущности из бд</mark>
+                                    <mark class="first-thread">entity.value += value //изменение значения</mark>
+                                    update(entity) //запись в бд с измененным значением
+                                }
+                            </code>
+                        </pre>
+                        <p>
+                            <mark class="second-thread">Второй поток</mark> получает данные из таблицы. Прочитает он то же значение что прочел первый поток.
+                        </p>
+                        <p>
+                            <mark class="first-thread">Первый поток</mark> добавляет к полученным данным значение параметра value.
+                        </p>
+                    </div>
+                    <div class="fragment">
+                        <pre>
+                            <code data-trim data-noescape>
+                                def add(id: Int, value: Int): Unit = {
+                                    entity = getById(id) //получение сущности из бд
+                                    <mark class="second-thread">entity.value += value //изменение значения</mark>
+                                    <mark class="first-thread">update(entity) //запись в бд с измененным значением</mark>
+                                }
+                            </code>
+                        </pre>
+                        <p>
+                            <mark class="second-thread">Второй поток</mark> добавляет к полученным данным значение параметра value.
+                        </p>
+                        <p>
+                            <mark class="first-thread">Первый поток</mark> запишет полученное значение в базу.
+                        </p>
+                    </div>
+                    <div class="fragment">
+                        <pre>
+                            <code data-trim data-noescape>
+                                def add(id: Int, value: Int): Unit = {
+                                    entity = getById(id) //получение сущности из бд
+                                    entity.value += value //изменение значения
+                                    <mark class="second-thread">update(entity) //запись в бд с измененным значением</mark>
+                                }
+                            </code>
+                        </pre>
+                        <p>
+                            <mark class="second-thread">Второй поток</mark> запишет полученное значение в базу.
+                        </p>
+                    </div>
+                    <div class="fragment">
+                        <pre>
+                            <code data-trim data-noescape>
+                                def add(id: Int, value: Int): Unit = {
+                                    entity = getById(id) //получение сущности из бд
+                                    entity.value += value //изменение значения
+                                    <mark class="second-thread">update(entity) //запись в бд с измененным значением</mark>
+                                }
+                            </code>
+                        </pre>
+                        <p>
+                            Таким образом, при вызове данного метода с одним и тем же идентификатором, в базу будет записан результат
+                            <mark class="second-thread">второго потока</mark>, при этом изменения от <mark class="first-thread">первого потока</mark>
+                            будут потеряны.
+                        </p>
+                    </div>
+                    <div class="fragment">
+                        <pre>
+                            <code data-trim data-noescape>
+                                def add(id: Int, value: Int): Unit = <mark>tx</mark> {
+                                    entity = getById(id)
+                                    entity.value += value
+                                    update(entity)
+                                }
+                            </code>
+                        </pre>
+                        <p>
+                            При использовании транзакции данный код при одновременном обращении все еще может работать как в том примере что был описан выше.
+                        </p>
+                    </div>
+                    <div class="fragment">
+                        <pre>
+                            <code data-trim data-noescape>
+                                def add(id: Int, value: Int): Unit = tx {
+                                    entity = getById(id)
+                                    if (entity.isEmpty) {
+                                        insert(new Entity(id, value))
+                                    }
+                                }
+                            </code>
+                        </pre>
+                        <p>
+                            Аналогичная проблема так же возникнет при ситуации с добавлением записи. Тут могут быть добавлены две записи.
+                        </p>
+                    </div>
+                </section>
+
+
+				<section class="with-hide-fragment">
+                    <h2>Немного теории</h2>
+                    <p class="fragment">К транзакциям в СУБД существует набор требований, известный большинству как ACID</p>
+                    <div class="fragment">
+                        <p><mark>A</mark> - Atomicity. Команды, выполняемые в транзакции, либо успешно выполнятся все(commit), либо ни одна(rollback).</p>
+                        <p><mark>C</mark> - Consistency. Гарантия перехода из одного корректного состояния в другое. Выполняются проверки на уровне базы(constraint'ы, foreign key и прочее).</p>
+                    </div>
+
+                    <div class="fragment">
+                        <p><mark>I</mark> - Isolation. Паралелльные транзакции не должны влиять на результат друг друга.</p>
+                        <p><mark>D</mark> - Durability. При успешном завершениии транзакции, никаие внешние события не должны привести к потере изменений, которые совершены в рамках этой транзакции.</p>
+                    </div>
+
+                    <div class="fragment">
+                        <p>Уровни изоляции транзакций</p>
+                        read uncommitted - можем читать данные, измененные другими транзакциями, включая не закомиченные изменения. При обновлении данных гарантируется исключение потери изменений.
+                    </div>
+
+                    <div class="fragment">
+                        <p>Уровни изоляции транзакций. Read uncommitted</p>
+                        <pre>
+                            <code data-trim data-noescape>
+                                def add(id: Int, value: Int): Unit = tx {
+                                    <mark class="second-thread">entity = getById(id)</mark>
+                                    entity.value += value
+                                    update(entity)
+                                    <mark class="first-thread">...</mark>
+                                }
+                            </code>
+                        </pre>
+                        <mark class="second-thread">Второй поток</mark> будет видеть изменения <mark class="first-thread">первого потока</mark>
+                    </div>
+
+                    <div class="fragment">
+                        <p>Уровни изоляции транзакций</p>
+                        read committed - можем читать данные, измененные другими транзакциями только в случае их коммита до чтения. При обновлении данных гарантируется исключение потери изменений (используется как дефолтный).
+                    </div>
+
+                    <div class="fragment">
+                        <p>Уровни изоляции транзакций. Read committed</p>
+                        <pre>
+                            <code data-trim data-noescape>
+                                def add(id: Int, value: Int): Unit = tx {
+                                    <mark class="second-thread">entity = getById(id)</mark>
+                                    entity.value += value
+                                    update(entity)
+                                    <mark class="first-thread">...</mark>
+                                }
+                            </code>
+                        </pre>
+                        <mark class="second-thread">Второй поток</mark> не увидит изменений <mark class="first-thread">первого потока</mark>
+                    </div>
+
+                    <div class="fragment">
+                        <p>Уровни изоляции транзакций</p>
+                        repeatable read - можем читать данные, измененные другими транзакциями только в случае их коммита до чтения. При изменении записей существует проверка на наличие изменения этих записей в рамкках других транзакций.
+                    </div>
+
+                    <div class="fragment">
+                        <p>Уровни изоляции транзакций. Repeatable read</p>
+                        <pre>
+                            <code data-trim data-noescape>
+                                def add(id: Int, value: Int): Unit = tx {
+                                    entity = getById(id)
+                                    entity.value += value
+                                    <mark class="second-thread">update(entity)</mark>
+                                    <mark class="first-thread">...</mark>
+                                }
+                            </code>
+                        </pre>
+                        <mark class="second-thread">Второй поток</mark> будет ждать выполнения транзакции <mark class="first-thread">первого потока</mark> и бросит эксепшн <br/>(в случае commit'а <mark class="first-thread">первого потока</mark>).
+                    </div>
+
+
+                    <div class="fragment">
+                        <p>Уровни изоляции транзакций</p>
+                        serializable - можем читать данные, измененные другими транзакциями только в случае их коммита до чтения. При изменении записей существует проверка на наличие изменения этих записей в рамкках других транзакций. Так же имеется проверка на создание новых записей. Минимальный уровень параллельного выполнения.
+                    </div>
+
+                    <div class="fragment">
+                        <p>Уровни изоляции транзакций. Serializable</p>
+                        <pre>
+                            <code data-trim data-noescape>
+                                def add(id: Int, value: Int): Unit = tx {
+                                    entity = getById(id)
+                                    if (entity.isEmpty) {
+                                        <mark class="second-thread">insert(new Entity(id, value))</mark>
+                                    }
+                                    <mark class="first-thread">...</mark>
+                                }
+                            </code>
+                        </pre>
+                        <div style="font-size: 35px">
+                            <mark class="second-thread">Второй поток</mark> будет ждать выполнения транзакции <mark class="first-thread">первого потока</mark> и бросит эксепшн <br/>(в случае commit'а <mark class="first-thread">первого потока</mark>).
+                        </div>
+                    </div>
+
+                    <div class="fragment">
+                        <p>Блокировки (lock)</p>
+                        Блокировки представляют из себя механизм для предотвращения одновременного изменения данных. Альтернатива блокировкам - создание snapshot'ов и их слияние.
+                    </div>
+
+                    <div class="fragment">
+                        <p>Блокировки (lock)</p>
+                        Пессимистичная - блокировка, которая явно указывает что данные будут изменены. Она захватывает набор данных и другие потоки вынуждены ждать, когда блокировка будет снята. Используется на уровне транзакций (в postgresql можно повешать явно через select for update). Блокировка снимается с коммитом или ролбэком транзакции.
+                    </div>
+
+                    <div class="fragment">
+                        <p>Блокировки (lock)</p>
+                        Оптимистичная - блокировка которая происходит как можно ближе к непосредственному изменению. Реализуется через дополнительное поле в базе с которым сравнивается предыдущее состояние. При измененном поле понятно что запись уже была изменена, и можно обработать данную ситуацию. Обычно присутствует поддержка со стороны ОРМ.
+                    </div>
+
+                    <div class="fragment">
+                        <p>Блокировки (lock). Оптимистичная блокировка</p>
+                        <pre>
+                            <code data-trim data-noescape>
+                                def add(id: Int, value: Int): Unit = {
+                                    entity = getById(id) // version = 0
+                                    entity.value += value
+                                    update(entity) // после апдейта версия изменится
+                                }
+                            </code>
+                        </pre>
+                        <pre>
+                            <code data-trim data-noescape>
+                                UPDATE table
+                                WHERE version = 0
+                                SET value = 30, version = version + 1
+                            </code>
+                        </pre>
+                    </div>
+                </section>
+
+
+                <section class="with-hide-fragment">
+                    <h2>Решение</h2>
+                    <p>Обновление записи</p>
+                    <div class="fragment">
+                        1. Поднять уровень изоляции. Самый нежелательный вариант в силу уменьшения параллельных вычислений. Для решения проблемы подойдет serializable или repeatable read.
+                    </div>
+                    <div class="fragment">
+                        2. Создание оптимистической блокировки. Присутствует в ОРМ, можно сделать самому. Важно составить запрос таким образом, что бы проверка была на уровне update. Плюс в некоторых ситуациях можно заменить UPDATE after SELECT на UPDATE с набором хитрых условий для изменения.
+                    </div>
+                    <div class="fragment">
+                        3. В некоторых СУБД можно наложить лок явно. Например в postgresql лок на уровне строк можно наложить через SELECT FOR UPDATE. Проблема подхода в том, что не все ОРМ поддерживают данный функционал.
+                    </div>
+                </section>
+
+                <section class="with-hide-fragment">
+                    <h2>Решение</h2>
+                    <p>Добавление записи</p>
+                    <div class="fragment">
+                        1. Поднять уровень изоляции. Самый нежелательный вариант в силу своей низкой производительности. Для решения проблемы подойдет serializable.
+                    </div>
+                    <div class="fragment">
+                        2. Для контроля добавления новой записи можно воспользоваться constraints, partition indexes и прочими.
+                        <pre>
+                            <code data-trim data-noescape>
+                                CREATE UNIQUE INDEX unique_index
+                                ON some_table ("some_foreign_id")
+                                WHERE (stage not in ('completed', 'cancelled'));
+                            </code>
+                        </pre>
+                    </div>
+                    <div class="fragment">
+                        3. В некоторых СУБД можно наложить лок на уровне таблицы. Postgres позволяет сделать это. Проблема подхода в том, что не все ОРМ поддерживают данный функционал.
+                    </div>
+                </section>
+
+                <section class="with-hide-fragment">
+                    <h2>Заключение</h2>
+                    <div class="fragment">
+                        <p>Использовать поднятие уровня изоляции - не лучшее, но возможное решение проблемы.<p>
+                        <p>Считаю что использование встроенных механизмов СУБД(constraints, partition indexes и прочее) - хорошая практика. И позволяет покрыть некоторый пул проблем.<p>
+                    </div>
+
+                    <div class="fragment">
+                        <p>При отсуствии контроля за изменением данных, UPDATE after SELECT выглядит как антипаттерн, так как может сбить с толку.<p>
+                        <p>В докладе были рассмотрены варианты предотвращения некорректного состояния в большей мере со стороны запросов и возможностей SQL.
+                            Существуют еще варианты решения данной проблемы со стороны прикладного языка.</p>
+                    </div>
+
+                </section>
+
+			</div>
+		</div>
+
+		<script src="js/reveal.js"></script>
+
+		<script>
+			// More info about config & dependencies:
+			// - https://github.com/hakimel/reveal.js#configuration
+			// - https://github.com/hakimel/reveal.js#dependencies
+			Reveal.initialize({
+				dependencies: [
+					{ src: 'plugin/markdown/marked.js' },
+					{ src: 'plugin/markdown/markdown.js' },
+					{ src: 'plugin/notes/notes.js', async: true },
+					{ src: 'plugin/highlight/highlight.js', async: true }
+				]
+			});
+		</script>
+	</body>
+</html>

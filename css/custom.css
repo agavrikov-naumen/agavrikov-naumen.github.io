@@ -1,0 +1,32 @@
+section .with-hide-fragment {
+    position:relative
+}
+
+section.with-hide-fragment .fragment {
+    position:absolute;
+    margin-left: auto;
+    margin-right: auto;
+    left: 0;
+    right: 0;
+}
+
+.reveal .slides section.with-hide-fragment .fragment.visible {
+    opacity: 0;
+}
+
+.reveal .slides section.with-hide-fragment .fragment.visible.current-fragment {
+    opacity: 1;
+}
+
+mark.first-thread {
+    background: green;
+}
+
+mark.second-thread {
+    background: yellow;
+}
+
+mark.aqua {
+    background: aqua;
+    color: black;
+}

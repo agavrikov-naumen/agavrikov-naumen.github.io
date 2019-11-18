@@ -19,14 +19,10 @@ section.with-hide-fragment .fragment {
 }
 
 mark.first-thread {
-    background: green;
+    background: aqua;
 }
 
 mark.second-thread {
     background: yellow;
 }
 
-mark.aqua {
-    background: aqua;
-    color: black;
-}
